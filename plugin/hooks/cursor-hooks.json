@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "hooks": {
+    "stop": [{
+      "command": "for d in \"$HOME/.nvm/versions/node\"/*/bin \"$HOME/.fnm/node-versions\"/*/installation/bin \"$HOME/.asdf/installs/nodejs\"/*/bin /opt/homebrew/bin /usr/local/bin \"$HOME/.local/bin\" \"$HOME/.volta/bin\"; do [ -x \"$d/node\" ] && exec \"$d/node\" \"./hooks/cursor-checkpoint.js\"; done; command -v node >/dev/null 2>&1 && exec node \"./hooks/cursor-checkpoint.js\"; exit 0",
+      "loop_limit": 1
+    }]
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "@handoff/plugin",
+  "private": true,
+  "version": "0.0.1",
+  "scripts": {
+    "build": "esbuild ../mcp-server/src/index.ts --bundle --platform=node --format=esm --target=node18 --outfile=mcp-server/index.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.21.5"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "handoff": {
+      "type": "stdio",
+      "command": "/bin/sh",
+      "args": [
+        "-c",
+        "for d in \"$HOME/.nvm/versions/node\"/*/bin \"$HOME/.fnm/node-versions\"/*/installation/bin \"$HOME/.asdf/installs/nodejs\"/*/bin /opt/homebrew/bin /usr/local/bin \"$HOME/.local/bin\" \"$HOME/.volta/bin\"; do [ -x \"$d/node\" ] && exec \"$d/node\" \"${PLUGIN_ROOT}/mcp-server/index.js\"; done; command -v node >/dev/null 2>&1 && exec node \"${PLUGIN_ROOT}/mcp-server/index.js\"; exit 127"
+      ],
+      "env": {
+        "HANDOFF_API_URL": "${HANDOFF_API_URL}",
+        "HANDOFF_API_KEY": "${HANDOFF_API_KEY}"
+      }
+    }
+  }
+}

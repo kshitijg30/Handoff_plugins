@@ -1,0 +1,13 @@
+{
+  "name": "handoff",
+  "owner": {
+    "name": "Kshitij Gera"
+  },
+  "plugins": [
+    {
+      "name": "handoff",
+      "source": "./plugin",
+      "description": "Attach to and checkpoint shared agent-session context, per project."
+    }
+  ]
+}
