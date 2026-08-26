@@ -10,7 +10,9 @@ loose word overlap.
 
 If you found a confident match (exact or otherwise), call `handoff_attach` with `projectName`
 set to that project's exact name, then summarize the returned context for the user in a few
-sentences before continuing.
+sentences before continuing. If the result includes a project knowledge base, read it too —
+it's durable project-level context (architecture, status), not just the latest checkpoint —
+and let it inform whatever you do next in this session.
 
 If nothing in the list is a confident match, do NOT call `handoff_attach` at all — tell the
 user plainly that no matching project was found, list the real project names that do exist,

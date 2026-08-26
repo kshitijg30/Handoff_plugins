@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "for d in \"$HOME/.nvm/versions/node\"/*/bin \"$HOME/.fnm/node-versions\"/*/installation/bin \"$HOME/.asdf/installs/nodejs\"/*/bin /opt/homebrew/bin /usr/local/bin \"$HOME/.local/bin\" \"$HOME/.volta/bin\"; do [ -x \"$d/node\" ] && exec \"$d/node\" \"${CLAUDE_PLUGIN_ROOT}/hooks/checkpoint.js\"; done; command -v node >/dev/null 2>&1 && exec node \"${CLAUDE_PLUGIN_ROOT}/hooks/checkpoint.js\"; echo 'handoff: node not found, skipping auto-checkpoint' >&2; exit 0",
+            "command": "command -v node >/dev/null 2>&1 && exec node \"${CLAUDE_PLUGIN_ROOT}/hooks/checkpoint.js\"; for d in \"$HOME/.nvm/versions/node\"/*/bin \"$HOME/.fnm/node-versions\"/*/installation/bin \"$HOME/.asdf/installs/nodejs\"/*/bin /opt/homebrew/bin /usr/local/bin \"$HOME/.local/bin\" \"$HOME/.volta/bin\"; do [ -x \"$d/node\" ] && exec \"$d/node\" \"${CLAUDE_PLUGIN_ROOT}/hooks/checkpoint.js\"; done; echo 'handoff: node not found, skipping auto-checkpoint' >&2; exit 0",
             "timeout": 10
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "for d in \"$HOME/.nvm/versions/node\"/*/bin \"$HOME/.fnm/node-versions\"/*/installation/bin \"$HOME/.asdf/installs/nodejs\"/*/bin /opt/homebrew/bin /usr/local/bin \"$HOME/.local/bin\" \"$HOME/.volta/bin\"; do [ -x \"$d/node\" ] && exec \"$d/node\" \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.js\"; done; command -v node >/dev/null 2>&1 && exec node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.js\"; echo 'handoff: node not found, skipping session-start log' >&2; exit 0",
+            "command": "command -v node >/dev/null 2>&1 && exec node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.js\"; for d in \"$HOME/.nvm/versions/node\"/*/bin \"$HOME/.fnm/node-versions\"/*/installation/bin \"$HOME/.asdf/installs/nodejs\"/*/bin /opt/homebrew/bin /usr/local/bin \"$HOME/.local/bin\" \"$HOME/.volta/bin\"; do [ -x \"$d/node\" ] && exec \"$d/node\" \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.js\"; done; echo 'handoff: node not found, skipping session-start log' >&2; exit 0",
             "timeout": 5
           }
         ]

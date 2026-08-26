@@ -22493,26 +22493,26 @@ var templateLiteralProcessor = (schema, _ctx, json2, _params) => {
 };
 var fileProcessor = (schema, _ctx, json2, _params) => {
   const _json = json2;
-  const file2 = {
+  const file3 = {
     type: "string",
     format: "binary",
     contentEncoding: "binary"
   };
   const { minimum, maximum, mime } = schema._zod.bag;
   if (minimum !== void 0)
-    file2.minLength = minimum;
+    file3.minLength = minimum;
   if (maximum !== void 0)
-    file2.maxLength = maximum;
+    file3.maxLength = maximum;
   if (mime) {
     if (mime.length === 1) {
-      file2.contentMediaType = mime[0];
-      Object.assign(_json, file2);
+      file3.contentMediaType = mime[0];
+      Object.assign(_json, file3);
     } else {
-      Object.assign(_json, file2);
+      Object.assign(_json, file3);
       _json.anyOf = mime.map((m) => ({ contentMediaType: m }));
     }
   } else {
-    Object.assign(_json, file2);
+    Object.assign(_json, file3);
   }
 };
 var successProcessor = (_schema, _ctx, json2, _params) => {
@@ -30994,10 +30994,16 @@ var StdioServerTransport = class {
 };
 
 // ../mcp-server/src/client.ts
-async function call(baseUrl2, apiKey2, path, init) {
+async function call(baseUrl2, getApiKey, path, init) {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    throw new Error(
+      "No Handoff API key configured. Set HANDOFF_API_KEY in your environment, or run handoff_add_org to register one."
+    );
+  }
   const res = await fetch(`${baseUrl2}${path}`, {
     method: init?.method ?? "GET",
-    headers: { Authorization: `Bearer ${apiKey2}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     ...init?.body !== void 0 ? { body: JSON.stringify(init.body) } : {}
   });
   const json2 = await res.json();
@@ -31007,11 +31013,16 @@ async function call(baseUrl2, apiKey2, path, init) {
   return json2;
 }
 function createClient(args) {
-  const { baseUrl: baseUrl2, apiKey: apiKey2 } = args;
+  const { baseUrl: baseUrl2, getApiKey } = args;
   return {
-    listProjects: () => call(baseUrl2, apiKey2, `/projects`),
-    attach: (projectName) => call(baseUrl2, apiKey2, `/projects/${encodeURIComponent(projectName)}/attach`),
-    checkpoint: (body) => call(baseUrl2, apiKey2, `/projects/${encodeURIComponent(body.projectName)}/checkpoint`, {
+    listProjects: () => call(baseUrl2, getApiKey, `/projects`),
+    attach: (projectName) => call(baseUrl2, getApiKey, `/projects/${encodeURIComponent(projectName)}/attach`),
+    getNodeContent: (sessionId, nodeId) => call(
+      baseUrl2,
+      getApiKey,
+      `/sessions/${encodeURIComponent(sessionId)}/nodes/${encodeURIComponent(nodeId)}/content`
+    ),
+    checkpoint: (body) => call(baseUrl2, getApiKey, `/projects/${encodeURIComponent(body.projectName)}/checkpoint`, {
       method: "POST",
       body: {
         description: body.description,
@@ -31022,15 +31033,109 @@ function createClient(args) {
         actor: body.actor
       }
     }),
-    ask: (args2) => call(baseUrl2, apiKey2, `/ask`, { method: "POST", body: args2 }),
-    listSkills: () => call(baseUrl2, apiKey2, `/skills`),
-    getSkill: (id) => call(baseUrl2, apiKey2, `/skills/${encodeURIComponent(id)}`),
-    createSkill: (args2) => call(baseUrl2, apiKey2, `/skills`, { method: "POST", body: args2 }),
-    useSkill: (args2) => call(baseUrl2, apiKey2, `/skills/${encodeURIComponent(args2.skillId)}/use`, {
+    // Overwrites the project's whole knowledge base. Deliberately PUT, not PATCH -- the agent
+    // regenerates the full markdown each time rather than the backend merging fragments.
+    setKnowledge: (body) => call(baseUrl2, getApiKey, `/projects/${encodeURIComponent(body.projectName)}/knowledge`, {
+      method: "PUT",
+      body: { knowledgeBase: body.knowledgeBase }
+    }),
+    ask: (args2) => call(baseUrl2, getApiKey, `/ask`, { method: "POST", body: args2 }),
+    // Looks up the session_starts row logged by the SessionStart hook for a given real Claude
+    // Code session id -- this is how handoff_save_transcript resolves "which local .jsonl file
+    // is THIS session's" without guessing. See sessionStartStore.ts / sessions.ts's
+    // GET /log-start/:claudeSessionId (Task 1's route).
+    getSessionStart: (claudeSessionId) => call(
+      baseUrl2,
+      getApiKey,
+      `/sessions/log-start/${encodeURIComponent(claudeSessionId)}`
+    ),
+    // Deliberately separate from checkpoint() -- posts to the new /sessions/save-transcript
+    // route (not /projects/:name/checkpoint), so the existing handoff_checkpoint tool/schema
+    // is never touched.
+    saveTranscript: (body) => call(baseUrl2, getApiKey, `/sessions/save-transcript`, { method: "POST", body }),
+    listSkills: () => call(baseUrl2, getApiKey, `/skills`),
+    getSkill: (id) => call(baseUrl2, getApiKey, `/skills/${encodeURIComponent(id)}`),
+    createSkill: (args2) => call(baseUrl2, getApiKey, `/skills`, { method: "POST", body: args2 }),
+    useSkill: (args2) => call(baseUrl2, getApiKey, `/skills/${encodeURIComponent(args2.skillId)}/use`, {
       method: "POST",
       body: { actor: args2.actor }
-    })
+    }),
+    // Ad-hoc call used only by handoff_add_org to verify a key actually works (and against
+    // which org) before it's saved -- deliberately bypasses the normal getApiKey() resolution
+    // since the key being tested isn't the active one yet.
+    verifyKey: (apiKey) => call(baseUrl2, () => apiKey, `/projects`)
   };
+}
+
+// ../mcp-server/src/tools.ts
+import { randomUUID } from "node:crypto";
+import { homedir as homedir2 } from "node:os";
+import { join as join2 } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { readFileSync as readFileSync2 } from "node:fs";
+
+// ../mcp-server/src/orgStore.ts
+import { readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+function dir() {
+  return join(homedir(), ".handoff");
+}
+function file2() {
+  return join(dir(), "orgs.json");
+}
+function load() {
+  try {
+    const parsed = JSON.parse(readFileSync(file2(), "utf8"));
+    if (parsed && typeof parsed === "object" && parsed.orgs) return parsed;
+    return { active: null, orgs: {} };
+  } catch {
+    return { active: null, orgs: {} };
+  }
+}
+function save(data) {
+  mkdirSync(dir(), { recursive: true });
+  writeFileSync(file2(), JSON.stringify(data, null, 2), { mode: 384 });
+  try {
+    chmodSync(file2(), 384);
+  } catch {
+  }
+}
+function resolveApiKey() {
+  const data = load();
+  if (data.active && data.orgs[data.active]) {
+    return data.orgs[data.active].apiKey;
+  }
+  return process.env.HANDOFF_API_KEY;
+}
+function listOrgs() {
+  const data = load();
+  return { active: data.active, names: Object.keys(data.orgs) };
+}
+function addOrg(name, apiKey) {
+  const data = load();
+  data.orgs[name] = { apiKey };
+  data.active = name;
+  save(data);
+}
+function switchOrg(name) {
+  const data = load();
+  if (!data.orgs[name]) {
+    return { ok: false, known: Object.keys(data.orgs) };
+  }
+  data.active = name;
+  save(data);
+  return { ok: true };
+}
+function removeOrg(name) {
+  const data = load();
+  if (!data.orgs[name]) {
+    return { ok: false, known: Object.keys(data.orgs) };
+  }
+  delete data.orgs[name];
+  if (data.active === name) data.active = null;
+  save(data);
+  return { ok: true };
 }
 
 // ../mcp-server/src/tools.ts
@@ -31064,13 +31169,86 @@ function registerTools(server2, client) {
     },
     async ({ projectName }) => {
       const result = await client.attach(projectName);
+      const knowledgeBlock = result.project.knowledgeBase ? `
+
+Project knowledge base:
+
+${result.project.knowledgeBase}` : "";
       return text(
         `Attached to "${result.project.name}". Latest checkpoint summary:
 
 ${result.summary}
 
 Ancestry (${result.ancestry.length} earlier checkpoint(s)):
-` + result.ancestry.map((n) => `- [node:${n.id}] ${n.createdBy}, ${n.createdAt}`).join("\n")
+` + result.ancestry.map((n) => `- [node:${n.id}] ${n.createdBy}, ${n.createdAt}`).join("\n") + knowledgeBlock
+      );
+    }
+  );
+  server2.registerTool(
+    "handoff_set_project_knowledge",
+    {
+      title: "Save a project's knowledge base",
+      description: "Save a markdown knowledge base for a project -- a durable, human-readable summary of what the project is, its architecture, and where it stands, distinct from any single checkpoint's summary. YOU generate the markdown yourself (e.g. by reading `git log` and the repo's own docs) -- this tool only persists it, and does NOT call any LLM itself. Overwrites any existing knowledge base for the project. Shown in the dashboard and re-surfaced automatically by handoff_attach on future sessions.",
+      inputSchema: { projectName: external_exports.string(), knowledgeBase: external_exports.string() }
+    },
+    async ({ projectName, knowledgeBase }) => {
+      const result = await client.setKnowledge({ projectName, knowledgeBase });
+      return text(`Saved knowledge base for "${result.project.name}" (${knowledgeBase.length} chars).`);
+    }
+  );
+  server2.registerTool(
+    "handoff_get_transcript",
+    {
+      title: "Materialize a Handoff checkpoint as a resumable local session",
+      description: "Fetch a project's latest (or a specific) checkpoint's FULL raw transcript and write it to a new file in this machine's own Claude Code session storage (~/.claude/projects/<encoded-cwd>/<new-uuid>.jsonl), so it becomes a real, separately resumable session -- not just a prose summary. Omit nodeId to use the project's latest checkpoint (resolved via handoff_attach). This does NOT hot-swap the current running conversation into that history; the returned session id must be resumed manually afterward.",
+      inputSchema: { projectName: external_exports.string(), nodeId: external_exports.string().optional() }
+    },
+    async ({ projectName, nodeId }) => {
+      const attachResult = await client.attach(projectName);
+      const sessionId = attachResult.session.id;
+      const resolvedNodeId = nodeId ?? attachResult.node.id;
+      const projectDisplayName = attachResult.project.name;
+      const content = await client.getNodeContent(sessionId, resolvedNodeId);
+      const encodedCwd = process.cwd().replace(/\//g, "-");
+      const projectDir = join2(homedir2(), ".claude", "projects", encodedCwd);
+      await mkdir(projectDir, { recursive: true });
+      const newSessionId = randomUUID();
+      const filePath = join2(projectDir, `${newSessionId}.jsonl`);
+      await writeFile(filePath, content.rawTranscript, "utf-8");
+      return text(
+        `Wrote the full transcript from "${projectDisplayName}" [node: ${resolvedNodeId}] to a new local session file:
+
+  ${filePath}
+
+New local session id: ${newSessionId}
+
+This file is now a real, resumable Claude Code session on this machine -- but it is NOT loaded into the current conversation. To actually pick it up, the user needs to take a separate action afterward, e.g. run:
+
+  claude --resume ${newSessionId}
+
+(or \`claude -r ${newSessionId}\`, or the interactive \`/resume\` picker) in a new terminal/session. This conversation keeps running unchanged.`
+      );
+    }
+  );
+  server2.registerTool(
+    "handoff_save_transcript",
+    {
+      title: "Back up the current session's full transcript",
+      description: `Back up the CURRENT session's complete raw transcript to a project, as a plain deterministic file copy -- no LLM reproduces or retypes the content. This is fully separate from handoff_checkpoint: it always stores a fixed placeholder summary ("Full transcript backup"), never a real one -- use handoff_checkpoint instead when you want an actual written summary. Requires that this session's start was already logged (the SessionStart hook does this automatically); if that hasn't happened, this fails with a not-found error rather than guessing which local file to read.`,
+      inputSchema: { projectName: external_exports.string(), actor: external_exports.string() }
+    },
+    async ({ projectName, actor }) => {
+      const claudeSessionId = process.env.CLAUDE_CODE_SESSION_ID;
+      if (!claudeSessionId) {
+        return text(
+          "Could not determine this session's real Claude Code session id (CLAUDE_CODE_SESSION_ID is not set in this process's environment). Cannot reliably locate the local transcript file without it -- refusing to guess (e.g. via most-recently-modified-file heuristics, which break with multiple sessions open in the same project)."
+        );
+      }
+      const { sessionStart } = await client.getSessionStart(claudeSessionId);
+      const rawTranscript = readFileSync2(sessionStart.localTranscriptPath, "utf-8");
+      const result = await client.saveTranscript({ projectName, claudeSessionId, rawTranscript, actor });
+      return text(
+        `Backed up the full transcript (${rawTranscript.length} bytes) from ${sessionStart.localTranscriptPath} to "${projectName}" [node: ${result.node.id}].`
       );
     }
   );
@@ -31179,6 +31357,80 @@ ${result.skill.instructions}`);
     }
   );
   server2.registerTool(
+    "handoff_list_orgs",
+    {
+      title: "List registered Handoff orgs",
+      description: "List the orgs whose API keys are registered on this machine, and which one is currently active. API keys are permanently scoped to one org each (a key can't be shared across orgs) -- this is how one plugin install can hold keys for several orgs and switch between them without editing shell config or restarting the agent. Call this before handoff_switch_org if you're not sure of the exact org name.",
+      inputSchema: {}
+    },
+    async () => {
+      const { active, names } = listOrgs();
+      if (names.length === 0) {
+        return text(
+          "No orgs registered yet (using HANDOFF_API_KEY from the environment, if set). Register one with handoff_add_org."
+        );
+      }
+      return text(
+        names.map((n) => `- ${n}${n === active ? " (active)" : ""}`).join("\n")
+      );
+    }
+  );
+  server2.registerTool(
+    "handoff_add_org",
+    {
+      title: "Register an org's API key",
+      description: "Register a new org's API key on this machine and make it the active org immediately. Verifies the key actually works (by listing its projects) before saving it -- fails loudly rather than storing a bad key. Get a key from that org's Handoff dashboard: switch to the org in the org switcher, then Connect tab -> Generate API key. `name` is a local nickname only (e.g. the org's real name lowercased) -- it is never sent to the backend, just used to label this key for handoff_switch_org later.",
+      inputSchema: { name: external_exports.string(), apiKey: external_exports.string() }
+    },
+    async ({ name, apiKey }) => {
+      let projectCount;
+      try {
+        const result = await client.verifyKey(apiKey);
+        projectCount = result.projects.length;
+      } catch (err) {
+        return text(
+          `This key doesn't work: ${err instanceof Error ? err.message : String(err)}. Not saved -- double-check it was copied in full from the Connect tab.`
+        );
+      }
+      addOrg(name, apiKey);
+      return text(
+        `Registered "${name}" (${projectCount} project(s) visible with this key) and switched to it -- handoff_list_projects and every other tool now act on "${name}" until handoff_switch_org is called again.`
+      );
+    }
+  );
+  server2.registerTool(
+    "handoff_switch_org",
+    {
+      title: "Switch the active Handoff org",
+      description: "Switch which registered org's key is used for every Handoff tool call, effective immediately -- no restart needed. Call handoff_list_orgs first if you don't know the exact registered name.",
+      inputSchema: { name: external_exports.string() }
+    },
+    async ({ name }) => {
+      const result = switchOrg(name);
+      if (!result.ok) {
+        return text(
+          result.known.length === 0 ? `No orgs registered yet. Register one with handoff_add_org first.` : `"${name}" isn't registered. Known orgs: ${result.known.join(", ")}.`
+        );
+      }
+      return text(`Switched to "${name}". Every Handoff tool call now acts on this org.`);
+    }
+  );
+  server2.registerTool(
+    "handoff_remove_org",
+    {
+      title: "Remove a registered org",
+      description: "Remove a registered org's key from this machine (does not revoke the key on the backend -- do that from the dashboard if needed). If it was the active org, no org is active afterward until handoff_switch_org or handoff_add_org is called.",
+      inputSchema: { name: external_exports.string() }
+    },
+    async ({ name }) => {
+      const result = removeOrg(name);
+      if (!result.ok) {
+        return text(`"${name}" isn't registered. Known orgs: ${result.known.join(", ") || "(none)"}.`);
+      }
+      return text(`Removed "${name}".`);
+    }
+  );
+  server2.registerTool(
     "handoff_skills_use",
     {
       title: "Record a skill use",
@@ -31194,12 +31446,11 @@ ${result.skill.instructions}`);
 
 // ../mcp-server/src/index.ts
 var baseUrl = process.env.HANDOFF_API_URL;
-var apiKey = process.env.HANDOFF_API_KEY;
-if (!baseUrl || !apiKey) {
-  console.error("HANDOFF_API_URL and HANDOFF_API_KEY must be set");
+if (!baseUrl) {
+  console.error("HANDOFF_API_URL must be set");
   process.exit(1);
 }
 var server = new McpServer({ name: "handoff", version: "0.0.1" });
-registerTools(server, createClient({ baseUrl, apiKey }));
+registerTools(server, createClient({ baseUrl, getApiKey: resolveApiKey }));
 var transport = new StdioServerTransport();
 await server.connect(transport);

@@ -1,57 +1,77 @@
 # Handoff plugin
 
-Attach to and checkpoint shared agent-session context, per project. Works the same underlying
-way in Claude Code, Cursor, and Codex CLI: an MCP server (`mcp-server/index.js`, self-contained,
-zero dependencies) talks to your org's Handoff API over HTTP using two env vars,
-`HANDOFF_API_URL` and `HANDOFF_API_KEY` — get both from your org's Handoff dashboard, Connect tab.
-No database or infra credentials live in this repo.
+Self-contained: `mcp-server/index.js` is a bundled, dependency-free build of `@handoff/mcp-server`
+(built via `npm run build` in this directory, or from the repo root — see `package.json`). This
+whole `plugin/` directory is everything Claude Code needs; it does not reach outside itself into
+the rest of the `handoff` monorepo, so it can be copied, zipped, or checked into a project on its
+own.
 
-## Claude Code
+Install: point Claude Code at this plugin directory (or the published marketplace entry, once
+published). Requires `HANDOFF_API_URL` and `HANDOFF_API_KEY` in your environment — get a key
+from your org's Handoff dashboard (Connect tab), or by running
+`tsx backend/scripts/create-org.ts "<org name>"` against a running backend once; store the
+printed key somewhere durable (it's shown only once). Never bake the key into a committed file —
+set it in your shell profile or an untracked `.env`.
 
-```
-claude plugin marketplace add kshitijg30/Handoff_plugins
-claude plugin install handoff
-```
-Then set `HANDOFF_API_URL` / `HANDOFF_API_KEY` wherever your shell picks up env vars.
+Cursor: copy this directory to `~/.cursor/plugins/local/handoff`, reload Cursor, then configure
+`HANDOFF_API_URL` and `HANDOFF_API_KEY` under **Plugins → Handoff → Configure**. Cursor loads the
+same commands and MCP tools; its stop hook checkpoints the session transcript once after each
+agent run.
 
-## Cursor
+If you're modifying `mcp-server/src` in the monorepo, rebuild the bundle before testing the
+plugin: `npm run build` in this directory (regenerates `mcp-server/index.js` from
+`../mcp-server/src/index.ts`).
 
-Same marketplace mechanism, Cursor's own manifest (`.cursor-plugin/`) is included at repo root:
-- In Cursor, run `/add-plugin` and point it at `kshitijg30/Handoff_plugins`, **or** open
-  Customize → Plugins → Marketplace and add the same repo.
-- Set `HANDOFF_API_URL` / `HANDOFF_API_KEY` under Plugins → Handoff → Configure.
+Commands: `/project list`, `/project attach <name>`,
+`/project checkpoint <name> "<what happened>"` (creates the project and its first session
+automatically if they don't exist yet; pass a `fromNodeId` to fork from an earlier checkpoint
+instead of continuing the latest one), `/ask "<question>"`,
+`/skill list`, `/skill save <name> "<description>" "<instructions>"`.
 
-If your Cursor version doesn't yet support adding a marketplace by repo, clone this repo and copy
-`plugin/` to `~/.cursor/plugins/local/handoff` instead, then reload Cursor.
+`/ask` and the skill commands (`/skill list`, `/skill save`) require the backend's `/ask` and
+`/skills` routes to be available, and the backend must have Azure OpenAI credentials configured
+for `/ask` to generate answers — the plugin itself needs no additional credentials beyond the
+usual `HANDOFF_API_URL`/`HANDOFF_API_KEY` pair.
 
-## Codex CLI
+## Working across multiple orgs
 
-Codex has no plugin/marketplace format (no bundling), so setup is three manual pieces. Clone this
-repo to a fixed path first, since the hook below needs an absolute path to it:
-```
-git clone https://github.com/kshitijg30/Handoff_plugins ~/.handoff
-```
+A single API key only ever works for the one org it was generated for (see the backend's
+`auth.ts` — keys are permanently org-scoped, there's no such thing as a multi-org key). If you're
+on more than one org, register each one's key once and switch between them from inside your
+agent, no restart needed:
 
-1. **MCP server** — add to `~/.codex/config.toml`:
-   ```toml
-   [mcp_servers.handoff]
-   command = "node"
-   args = ["/Users/you/.handoff/plugin/mcp-server/index.js"]
-   env_vars = ["HANDOFF_API_URL", "HANDOFF_API_KEY"]
-   ```
-   (`env_vars` forwards those two vars from your own shell environment — set them in your shell
-   profile, same as the other clients.)
+- `/org add <local-name> <api-key>` — get the key from that org's Handoff dashboard (org
+  switcher → Connect tab → Generate API key), then register it here under any name you want
+  (e.g. `/org add juspay hk_...`). Verifies the key actually works before saving it, and switches
+  to it immediately.
+- `/org switch <local-name>` — switch which registered org every Handoff tool call acts on.
+  Takes effect on the very next tool call.
+- `/org list` — see what's registered and which one is active.
+- `/org remove <local-name>` — forget a registered key locally (does not revoke it on the
+  backend).
 
-2. **Slash commands** — copy the prompt files so `/project-attach`, `/project-checkpoint`,
-   `/project-list`, `/ask`, `/skill-list`, `/skill-save` show up in Codex's slash menu:
-   ```
-   cp ~/.handoff/plugin/commands/*.md ~/.codex/prompts/
-   ```
+If you never touch these commands, nothing changes: the plugin falls back to `HANDOFF_API_KEY`
+from your environment exactly as before. Registered keys live in `~/.handoff/orgs.json`
+(`chmod 600`, never committed) — separate from that env var, and take priority over it once you've
+registered at least one org.
 
-3. **Auto-checkpoint on session end** (optional) — merge `plugin/hooks/codex-hooks.json`'s
-   contents into `~/.codex/hooks.json` (create it if it doesn't exist yet). It runs
-   `hooks/codex-checkpoint.js`, which asks Codex to summarize and checkpoint the session itself
-   when you stop — same idea as the Claude Code/Cursor hooks, just wired through Codex's own
-   `decision: "block"` continuation mechanism instead of a spawned sub-session.
+## Automatic checkpointing & data handling
 
-Without step 3, checkpointing is still available manually via `/project-checkpoint`.
+By default, this plugin never reads your session transcript or sends anything to the backend on
+its own — checkpointing only happens when you run `/project checkpoint` yourself. There is an
+optional Stop-hook (`hooks/checkpoint.js`, plus Codex/Cursor equivalents) that, once enabled, reads
+the full transcript of every session and checkpoints it automatically when the session ends. This
+is opt-in, not on by default: set `HANDOFF_AUTO_CHECKPOINT=1` in your environment to turn it on.
+
+When enabled:
+- Every trigger is logged locally, before anything is read or sent, to `~/.handoff/checkpoint.log`
+  (one JSON line per event: timestamp, cwd, transcript path, actor) — a local record independent
+  of the backend, so you can always see what this machine reported doing.
+- The transcript path is validated (must exist, must be under your home directory) before it's
+  used.
+- The background checkpoint-writer session (Claude Code path) runs with an explicit tool
+  allowlist — only `Read`, `handoff_list_projects`, `handoff_checkpoint` — nothing else.
+
+To find your machine's `claude` binary without rescanning every install location on every
+session, set `HANDOFF_CLAUDE_BIN` to its full path; otherwise it's resolved once via normal `PATH`
+lookup and cached to `~/.handoff/bin-cache.json`.

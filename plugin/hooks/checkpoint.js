@@ -3,9 +3,20 @@
 // session's real transcript, writes a real summary, and pushes both as a
 // checkpoint via the handoff_checkpoint MCP tool -- so a checkpoint mirrors
 // what Claude actually saw, not a hand-typed reconstruction.
+//
+// Trust boundaries, deliberate:
+// - Off by default. Nothing here reads a transcript or spawns anything
+//   unless HANDOFF_AUTO_CHECKPOINT=1 is set, matching the project's own
+//   "checkpointing is explicit-only" principle.
+// - Every trigger is recorded to a local, human-readable log
+//   (~/.handoff/checkpoint.log) before anything is spawned, so what left
+//   this machine is auditable without trusting the backend.
+// - transcript_path is validated (must exist, must be under $HOME) before
+//   use, since it's untrusted input from the hook payload.
 "use strict";
 
 const { spawn, spawnSync } = require("node:child_process");
+const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
@@ -15,23 +26,65 @@ if (process.env.HANDOFF_CHECKPOINT_RUNNER === "1") {
   process.exit(0);
 }
 
+// Opt-in only: auto-checkpointing reads a full session transcript and sends
+// it to Handoff's backend, so it must be a deliberate choice, not a silent
+// default. Set HANDOFF_AUTO_CHECKPOINT=1 in your environment to enable it.
+if (process.env.HANDOFF_AUTO_CHECKPOINT !== "1") {
+  process.exit(0);
+}
+
+const HANDOFF_DIR = path.join(os.homedir(), ".handoff");
+
 function readStdin() {
   try {
-    const fs = require("node:fs");
     return fs.readFileSync(0, "utf8");
   } catch {
     return "";
   }
 }
 
-function findOnPath(bin) {
+// Returns the resolved, absolute transcript path if it's trustworthy, or
+// null otherwise. Callers must use the RETURNED path downstream (not the
+// raw candidate) -- otherwise a relative candidate could be validated
+// against one cwd but later re-resolved against a different one (e.g. the
+// spawned subprocess's cwd), letting an untrusted string slip past the
+// check it was supposedly validated by.
+function resolveTrustedTranscriptPath(candidate) {
+  if (!candidate || typeof candidate !== "string") return null;
+  try {
+    const resolved = path.resolve(candidate);
+    const home = os.homedir();
+    if ((resolved === home || resolved.startsWith(home + path.sep)) && fs.existsSync(resolved)) {
+      return resolved;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function appendAuditLog(entry) {
+  try {
+    fs.mkdirSync(HANDOFF_DIR, { recursive: true });
+    fs.appendFileSync(path.join(HANDOFF_DIR, "checkpoint.log"), JSON.stringify(entry) + "\n");
+  } catch {
+    // Local audit logging is best-effort -- never block a checkpoint over it.
+  }
+}
+
+function resolveOnPathDirectly(bin) {
+  // Normal PATH resolution first -- a hook's shell env is sometimes
+  // stripped of node-version-manager shims, which is the only reason the
+  // directory scan below exists at all.
+  const which = spawnSync("command", ["-v", bin], { shell: true, encoding: "utf8" });
+  const resolved = which.stdout && which.stdout.trim();
+  if (resolved) return resolved;
+
   const candidateDirs = [];
   const home = os.homedir();
   const globDirs = (base) => {
     try {
-      return require("node:fs")
-        .readdirSync(base)
-        .map((d) => path.join(base, d));
+      return fs.readdirSync(base).map((d) => path.join(base, d));
     } catch {
       return [];
     }
@@ -45,15 +98,41 @@ function findOnPath(bin) {
   );
   candidateDirs.push("/opt/homebrew/bin", "/usr/local/bin", path.join(home, ".local", "bin"), path.join(home, ".volta", "bin"));
 
-  const fs = require("node:fs");
   for (const dir of candidateDirs) {
     const full = path.join(dir, bin);
     if (fs.existsSync(full)) return full;
   }
-  // Fall back to whatever the current PATH resolves.
-  const which = spawnSync("command", ["-v", bin], { shell: true, encoding: "utf8" });
-  const resolved = which.stdout && which.stdout.trim();
-  return resolved || bin;
+  return bin;
+}
+
+function findOnPath(bin) {
+  // Explicit override always wins, and skips every lookup below.
+  if (process.env.HANDOFF_CLAUDE_BIN && fs.existsSync(process.env.HANDOFF_CLAUDE_BIN)) {
+    return process.env.HANDOFF_CLAUDE_BIN;
+  }
+
+  // Cache a successful resolution so most invocations do a single stat
+  // instead of re-scanning every install location on every session Stop.
+  const cachePath = path.join(HANDOFF_DIR, "bin-cache.json");
+  let cache = {};
+  try {
+    cache = JSON.parse(fs.readFileSync(cachePath, "utf8"));
+  } catch {
+    cache = {};
+  }
+  if (cache[bin] && fs.existsSync(cache[bin])) {
+    return cache[bin];
+  }
+
+  const resolved = resolveOnPathDirectly(bin);
+  try {
+    fs.mkdirSync(HANDOFF_DIR, { recursive: true });
+    cache[bin] = resolved;
+    fs.writeFileSync(cachePath, JSON.stringify(cache));
+  } catch {
+    // Caching is an optimization, not a requirement.
+  }
+  return resolved;
 }
 
 function gitUserName(cwd) {
@@ -71,8 +150,8 @@ function main() {
     payload = {};
   }
 
-  const transcriptPath = payload.transcript_path || payload.transcriptPath;
   const cwd = payload.cwd || process.cwd();
+  const transcriptPath = resolveTrustedTranscriptPath(payload.transcript_path || payload.transcriptPath);
   if (!transcriptPath) {
     process.exit(0);
   }
@@ -81,6 +160,14 @@ function main() {
   const actor = gitUserName(cwd) || os.userInfo().username || "unknown";
 
   const claudeBin = findOnPath("claude");
+
+  appendAuditLog({
+    ts: new Date().toISOString(),
+    event: "auto_checkpoint_triggered",
+    cwd,
+    transcriptPath,
+    actor,
+  });
 
   const systemPrompt =
     "You are Handoff's automatic checkpoint writer. You have exactly three tools available: Read, " +

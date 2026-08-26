@@ -5,10 +5,6 @@
 // is THIS session's" later on. Fire-and-forget: the network call happens in a detached child
 // process so this hook returns instantly and never delays session startup, and every error
 // (missing config, network failure, non-2xx response) is swallowed silently.
-//
-// Does NOT touch checkpoint.js / the Stop hook -- see
-// docs/superpowers/plans/2026-08-25-transcript-pipeline/00-context-and-contract.md and
-// 02-plugin-hooks.md for the full contract this implements.
 "use strict";
 
 const { spawn, spawnSync } = require("node:child_process");
@@ -55,7 +51,8 @@ if (process.env.HANDOFF_SESSION_START_SEND === "1") {
     }
     process.exit(0);
   })();
-  return;
+} else {
+  main();
 }
 
 function main() {
@@ -67,12 +64,8 @@ function main() {
     payload = {};
   }
 
-  // SessionStart's payload carries the same common fields as Stop's (session_id,
-  // transcript_path, cwd, hook_event_name) plus a SessionStart-only `source`
-  // (startup/resume/clear/compact/fork) that we don't need here. Accept both snake_case (the
-  // documented/actual shape) and camelCase defensively, same as checkpoint.js does for Stop.
-  const sessionId = payload.session_id || payload.sessionId;
-  const transcriptPath = payload.transcript_path || payload.transcriptPath;
+  const sessionId = payload.session_id;
+  const transcriptPath = payload.transcript_path;
   const cwd = payload.cwd || process.cwd();
 
   if (!sessionId || !transcriptPath) {
@@ -105,5 +98,3 @@ function main() {
 
   process.exit(0);
 }
-
-main();
