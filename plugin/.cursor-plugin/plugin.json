@@ -1,14 +1,19 @@
 {
   "name": "handoff",
-  "version": "0.0.1",
+  "version": "0.1.1",
   "description": "Share, search, and continue AI coding-agent context across your organization.",
   "hooks": "hooks/cursor-hooks.json",
   "variables": {
     "type": "object",
     "properties": {
-      "HANDOFF_API_URL": { "type": "string", "title": "Handoff API URL" },
-      "HANDOFF_API_KEY": { "type": "string", "title": "Handoff API key" }
-    },
-    "required": ["HANDOFF_API_URL", "HANDOFF_API_KEY"]
+      "HANDOFF_API_URL": {
+        "type": "string",
+        "title": "Handoff API URL (optional -- defaults to the hosted backend)"
+      },
+      "HANDOFF_API_KEY": {
+        "type": "string",
+        "title": "Handoff API key (optional -- prefer running /org add in a chat instead)"
+      }
+    }
   }
 }

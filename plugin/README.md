@@ -6,17 +6,28 @@ whole `plugin/` directory is everything Claude Code needs; it does not reach out
 the rest of the `handoff` monorepo, so it can be copied, zipped, or checked into a project on its
 own.
 
-Install: point Claude Code at this plugin directory (or the published marketplace entry, once
-published). Requires `HANDOFF_API_URL` and `HANDOFF_API_KEY` in your environment — get a key
-from your org's Handoff dashboard (Connect tab), or by running
+Install: point Claude Code at this plugin directory (or the published marketplace entry). No
+environment variables or shell profile edits are required — start a session and run
+`/org add <a-name-you-choose> <api-key>` (get a key from your org's Handoff dashboard: org
+switcher → Connect tab → Generate API key, or by running
 `tsx backend/scripts/create-org.ts "<org name>"` against a running backend once; store the
-printed key somewhere durable (it's shown only once). Never bake the key into a committed file —
-set it in your shell profile or an untracked `.env`.
+printed key somewhere durable, it's shown only once). This registers the key in
+`~/.handoff/orgs.json` and takes effect immediately, no restart needed.
 
-Cursor: copy this directory to `~/.cursor/plugins/local/handoff`, reload Cursor, then configure
-`HANDOFF_API_URL` and `HANDOFF_API_KEY` under **Plugins → Handoff → Configure**. Cursor loads the
-same commands and MCP tools; its stop hook checkpoints the session transcript once after each
-agent run.
+`HANDOFF_API_URL`/`HANDOFF_API_KEY` env vars still work as a legacy fallback if you already have
+them set, but there's a real reason not to rely on them: the MCP server subprocess only sees
+whatever's actually in its process environment at launch, and a line appended to `.zshrc`/
+`.bashrc` never reaches a terminal that's already open, an IDE-embedded terminal that doesn't
+source rc files, or an app launched outside a shell entirely — this was the actual cause behind
+"HANDOFF_API_URL not set" setup failures. `/org add` sidesteps all of that by writing straight to
+a file the server reads on every call. Never bake a key into a committed file, whichever path you
+use.
+
+Cursor: copy this directory to `~/.cursor/plugins/local/handoff`, reload Cursor, then run
+`/org add <name> <api-key>` in a chat — same as above. Cursor's **Plugins → Handoff → Configure**
+screen still exists if you prefer env-var-style config, but both fields there are now optional.
+Cursor loads the same commands and MCP tools; its stop hook checkpoints the session transcript
+once after each agent run.
 
 If you're modifying `mcp-server/src` in the monorepo, rebuild the bundle before testing the
 plugin: `npm run build` in this directory (regenerates `mcp-server/index.js` from

@@ -1,16 +1,27 @@
 #!/usr/bin/env bash
 # Handoff one-command installer. Run via:
-#   curl -fsSL https://raw.githubusercontent.com/kshitijg30/Handoff_plugins/main/install.sh | bash -s -- <claude|cursor|codex> <HANDOFF_API_URL> <HANDOFF_API_KEY>
+#   curl -fsSL https://raw.githubusercontent.com/kshitijg30/Handoff_plugins/main/install.sh | bash -s -- <claude|cursor|codex> [HANDOFF_API_KEY] [HANDOFF_API_URL]
+#
+# HANDOFF_API_KEY and HANDOFF_API_URL are now both optional:
+# - HANDOFF_API_URL defaults to the hosted backend inside the plugin itself; only pass it if
+#   you're self-hosting a different backend.
+# - HANDOFF_API_KEY, if you pass it here, only gets written to your shell profile as a legacy
+#   fallback -- the recommended way to register a key is `/org add <name> <api-key>` inside your
+#   agent AFTER installing (Claude Code/Cursor/Codex, whichever this installs for), since that
+#   goes into ~/.handoff/orgs.json directly and needs no shell restart, no env var, and works
+#   even if this process's shell profile edit never reaches wherever your agent actually runs
+#   from (a GUI-launched terminal, an IDE-embedded one, etc. often don't source .zshrc/.bashrc).
+#
 # Idempotent: safe to re-run, never overwrites config that's already there.
 set -euo pipefail
 
 CLIENT="${1:-}"
-API_URL="${2:-}"
-API_KEY="${3:-}"
+API_KEY="${2:-}"
+API_URL="${3:-}"
 REPO="kshitijg30/Handoff_plugins"
 
-if [ -z "$CLIENT" ] || [ -z "$API_URL" ] || [ -z "$API_KEY" ]; then
-  echo "Usage: install.sh <claude|cursor|codex> <HANDOFF_API_URL> <HANDOFF_API_KEY>" >&2
+if [ -z "$CLIENT" ]; then
+  echo "Usage: install.sh <claude|cursor|codex> [HANDOFF_API_KEY] [HANDOFF_API_URL]" >&2
   exit 1
 fi
 
@@ -19,20 +30,23 @@ case "${SHELL:-}" in
   *) RC_FILE="$HOME/.zshrc" ;;
 esac
 
+# Legacy fallback only -- registering via `/org add` after install is the primary path now (see
+# header comment). Only runs at all if a key was actually passed in.
 persist_env() {
-  if ! grep -q "HANDOFF_API_URL" "$RC_FILE" 2>/dev/null; then
+  if [ -z "$API_KEY" ]; then
+    return 0
+  fi
+  if ! grep -q "HANDOFF_API_KEY" "$RC_FILE" 2>/dev/null; then
     {
       echo ""
-      echo "# Added by Handoff installer"
-      echo "export HANDOFF_API_URL=\"$API_URL\""
+      echo "# Added by Handoff installer (legacy fallback -- prefer \`/org add\` instead)"
+      [ -n "$API_URL" ] && echo "export HANDOFF_API_URL=\"$API_URL\""
       echo "export HANDOFF_API_KEY=\"$API_KEY\""
     } >> "$RC_FILE"
-    echo "Added HANDOFF_API_URL/HANDOFF_API_KEY to $RC_FILE"
+    echo "Added HANDOFF_API_KEY to $RC_FILE as a fallback (a new shell/restart is needed for it to take effect)."
   else
-    echo "$RC_FILE already sets HANDOFF_API_URL — leaving it alone (update it by hand if the key changed)."
+    echo "$RC_FILE already sets HANDOFF_API_KEY — leaving it alone (update it by hand if the key changed)."
   fi
-  export HANDOFF_API_URL="$API_URL"
-  export HANDOFF_API_KEY="$API_KEY"
 }
 
 # Clones $REPO to $1, or fast-forward pulls if it's already there. Refuses to
@@ -56,7 +70,9 @@ case "$CLIENT" in
     persist_env
     claude plugin marketplace add "$REPO"
     claude plugin install handoff
-    echo "Claude Code: done. Start a new session to pick up the env vars."
+    echo "Claude Code: plugin installed."
+    echo "Start a new session, then run: /org add <a-name-you-choose> <your-handoff-api-key>"
+    echo "(get a key from your org's Handoff dashboard: org switcher -> Connect tab -> Generate API key)"
     ;;
 
   cursor)
@@ -67,9 +83,10 @@ case "$CLIENT" in
     # marketplace.json lives -- symlink so `git pull` in ~/.handoff keeps it current.
     mkdir -p "$HOME/.cursor/plugins/local"
     ln -sfn "$HOME/.handoff/plugin" "$HOME/.cursor/plugins/local/handoff"
-    echo "Cursor: plugin linked at ~/.cursor/plugins/local/handoff. Reload Cursor, then open"
-    echo "Plugins -> Handoff -> Configure and paste in HANDOFF_API_URL / HANDOFF_API_KEY"
-    echo "(Cursor reads plugin variables from its own config UI, not your shell)."
+    echo "Cursor: plugin linked at ~/.cursor/plugins/local/handoff. Reload Cursor, then either:"
+    echo "  - run /org add <a-name-you-choose> <your-handoff-api-key> in a Cursor chat (recommended), or"
+    echo "  - open Plugins -> Handoff -> Configure and paste in HANDOFF_API_KEY there instead"
+    echo "    (HANDOFF_API_URL can stay blank -- it defaults to the hosted backend)."
     ;;
 
   codex)
@@ -103,6 +120,7 @@ case "$CLIENT" in
       echo "plugin/hooks/codex-hooks.json in by hand if you want auto-checkpoint-on-stop."
     fi
     echo "Codex: done. Slash commands are in ~/.codex/prompts, MCP server is configured."
+    echo "Start a new Codex session, then run: /org-add <a-name-you-choose> <your-handoff-api-key>"
     ;;
 
   *)

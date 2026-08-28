@@ -1,18 +1,14 @@
 {
   "name": "handoff",
-  "version": "0.0.1",
+  "version": "0.1.1",
   "description": "Attach to and checkpoint shared agent-session context, per project.",
   "mcpServers": {
     "handoff": {
       "command": "/bin/sh",
       "args": [
         "-c",
-        "command -v node >/dev/null 2>&1 && exec node \"$CLAUDE_PLUGIN_ROOT/mcp-server/index.js\"; for d in \"$HOME/.nvm/versions/node\"/*/bin \"$HOME/.fnm/node-versions\"/*/installation/bin \"$HOME/.asdf/installs/nodejs\"/*/bin /opt/homebrew/bin /usr/local/bin \"$HOME/.local/bin\" \"$HOME/.volta/bin\"; do [ -x \"$d/node\" ] && exec \"$d/node\" \"$CLAUDE_PLUGIN_ROOT/mcp-server/index.js\"; done; echo 'handoff: node not found on PATH or in common install locations' >&2; exit 127"
-      ],
-      "env": {
-        "HANDOFF_API_URL": "${HANDOFF_API_URL}",
-        "HANDOFF_API_KEY": "${HANDOFF_API_KEY}"
-      }
+        "ok_node() { \"$1\" -e 'process.exit(process.versions.node.split(\".\")[0] >= 18 ? 0 : 1)' >/dev/null 2>&1; }; candidate=''; if command -v node >/dev/null 2>&1; then candidate=$(command -v node); fi; if [ -n \"$candidate\" ] && ok_node \"$candidate\"; then exec \"$candidate\" \"$CLAUDE_PLUGIN_ROOT/mcp-server/index.js\"; fi; for d in \"$HOME/.nvm/versions/node\"/*/bin \"$HOME/.fnm/node-versions\"/*/installation/bin \"$HOME/.asdf/installs/nodejs\"/*/bin /opt/homebrew/bin /usr/local/bin \"$HOME/.local/bin\" \"$HOME/.volta/bin\"; do if [ -x \"$d/node\" ] && ok_node \"$d/node\"; then exec \"$d/node\" \"$CLAUDE_PLUGIN_ROOT/mcp-server/index.js\"; fi; done; if [ -n \"$candidate\" ]; then ver=$(\"$candidate\" --version 2>/dev/null); echo \"handoff: found node ${ver:-unknown} on PATH but need >=18, and no newer node found in nvm/fnm/asdf/homebrew/volta locations\" >&2; else echo 'handoff: node not found on PATH or in common install locations' >&2; fi; exit 127"
+      ]
     }
   }
 }

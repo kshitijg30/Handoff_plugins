@@ -15,6 +15,11 @@ session id, and exactly how to resume it — including its caveat that this is N
 continuing in the current conversation, and that resuming is a separate action the user has to
 take themselves afterward. Don't soften or drop that caveat.
 
+Most checkpoints have no stored transcript — only a written summary — because
+`/handoff:project-checkpoint` never captures one. When that's the case the tool writes nothing
+and says so; relay that plainly too, and point the user at `/handoff:save-transcript` (run in
+the originating session) as the only way a byte-exact transcript ever gets stored.
+
 If nothing in the list is a confident match, do NOT call `handoff_get_transcript` at all — tell
 the user plainly that no matching project was found, list the real project names that do
 exist, and ask whether they meant one of those instead.

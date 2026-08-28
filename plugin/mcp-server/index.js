@@ -2979,7 +2979,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve.call(this, root, ref);
+      let _sch = resolve2.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a3 = root.localRefs) === null || _a3 === void 0 ? void 0 : _a3[ref];
         const { schemaId } = this.opts;
@@ -3006,7 +3006,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve(root, ref) {
+    function resolve2(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3637,7 +3637,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve(baseURI, relativeURI, options) {
+    function resolve2(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const { parsed: baseParsed, malformedAuthorityOrPort: baseMalformed } = parseWithStatus(baseURI, schemelessOptions);
       const { parsed: relativeParsed, malformedAuthorityOrPort: relativeMalformed } = parseWithStatus(relativeURI, schemelessOptions);
@@ -3921,7 +3921,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve,
+      resolve: resolve2,
       resolveComponent,
       equal,
       serialize,
@@ -28866,7 +28866,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve) => setTimeout(resolve, pollInterval));
+        await new Promise((resolve2) => setTimeout(resolve2, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error51) {
@@ -28883,7 +28883,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       const earlyReject = (error51) => {
         reject(error51);
       };
@@ -28961,7 +28961,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve(parseResult.data);
+            resolve2(parseResult.data);
           }
         } catch (error51) {
           reject(error51);
@@ -29222,12 +29222,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve, interval);
+      const timeoutId = setTimeout(resolve2, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -30318,7 +30318,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve) => setTimeout(resolve, pollInterval));
+      await new Promise((resolve2) => setTimeout(resolve2, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -30982,18 +30982,20 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve) => {
+    return new Promise((resolve2) => {
       const json2 = serializeMessage(message);
       if (this._stdout.write(json2)) {
-        resolve();
+        resolve2();
       } else {
-        this._stdout.once("drain", resolve);
+        this._stdout.once("drain", resolve2);
       }
     });
   }
 };
 
 // ../mcp-server/src/client.ts
+var DEFAULT_TIMEOUT_MS = 2e4;
+var DEFAULT_TIMEOUT_LARGE_MS = 6e4;
 async function call(baseUrl2, getApiKey, path, init) {
   const apiKey = getApiKey();
   if (!apiKey) {
@@ -31001,11 +31003,25 @@ async function call(baseUrl2, getApiKey, path, init) {
       "No Handoff API key configured. Set HANDOFF_API_KEY in your environment, or run handoff_add_org to register one."
     );
   }
-  const res = await fetch(`${baseUrl2}${path}`, {
-    method: init?.method ?? "GET",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    ...init?.body !== void 0 ? { body: JSON.stringify(init.body) } : {}
-  });
+  const timeoutMs = init?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(`${baseUrl2}${path}`, {
+      method: init?.method ?? "GET",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      signal: controller.signal,
+      ...init?.body !== void 0 ? { body: JSON.stringify(init.body) } : {}
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(`Request to ${path} timed out after ${Math.round(timeoutMs / 1e3)}s`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   const json2 = await res.json();
   if (!res.ok) {
     throw new Error(json2.error ?? `request failed with status ${res.status}`);
@@ -31028,10 +31044,12 @@ function createClient(args) {
         description: body.description,
         sessionId: body.sessionId,
         parentId: body.parentId,
-        rawTranscript: body.rawTranscript,
         summary: body.summary,
         actor: body.actor
-      }
+      },
+      // The summary is the whole payload and can be long (a full written record of the
+      // session) -- give the backend more room than a plain small POST before giving up.
+      timeoutMs: DEFAULT_TIMEOUT_LARGE_MS
     }),
     // Overwrites the project's whole knowledge base. Deliberately PUT, not PATCH -- the agent
     // regenerates the full markdown each time rather than the backend merging fragments.
@@ -31052,7 +31070,13 @@ function createClient(args) {
     // Deliberately separate from checkpoint() -- posts to the new /sessions/save-transcript
     // route (not /projects/:name/checkpoint), so the existing handoff_checkpoint tool/schema
     // is never touched.
-    saveTranscript: (body) => call(baseUrl2, getApiKey, `/sessions/save-transcript`, { method: "POST", body }),
+    saveTranscript: (body) => call(baseUrl2, getApiKey, `/sessions/save-transcript`, {
+      method: "POST",
+      body,
+      // Always carries a full raw session transcript -- same reasoning as checkpoint()'s
+      // timeoutMs above.
+      timeoutMs: DEFAULT_TIMEOUT_LARGE_MS
+    }),
     listSkills: () => call(baseUrl2, getApiKey, `/skills`),
     getSkill: (id) => call(baseUrl2, getApiKey, `/skills/${encodeURIComponent(id)}`),
     createSkill: (args2) => call(baseUrl2, getApiKey, `/skills`, { method: "POST", body: args2 }),
@@ -31070,12 +31094,12 @@ function createClient(args) {
 // ../mcp-server/src/tools.ts
 import { randomUUID } from "node:crypto";
 import { homedir as homedir2 } from "node:os";
-import { join as join2 } from "node:path";
+import { join as join2, resolve, sep } from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
-import { readFileSync as readFileSync2 } from "node:fs";
+import { readFileSync as readFileSync2, existsSync } from "node:fs";
 
 // ../mcp-server/src/orgStore.ts
-import { readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, chmodSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 function dir() {
@@ -31095,11 +31119,14 @@ function load() {
 }
 function save(data) {
   mkdirSync(dir(), { recursive: true });
-  writeFileSync(file2(), JSON.stringify(data, null, 2), { mode: 384 });
+  const target = file2();
+  const tmp = `${target}.tmp`;
+  writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 384 });
   try {
-    chmodSync(file2(), 384);
+    chmodSync(tmp, 384);
   } catch {
   }
+  renameSync(tmp, target);
 }
 function resolveApiKey() {
   const data = load();
@@ -31141,6 +31168,19 @@ function removeOrg(name) {
 // ../mcp-server/src/tools.ts
 function text(s) {
   return { content: [{ type: "text", text: s }] };
+}
+function resolveTrustedLocalPath(candidate) {
+  if (!candidate || typeof candidate !== "string") return null;
+  try {
+    const resolved = resolve(candidate);
+    const home = homedir2();
+    if ((resolved === home || resolved.startsWith(home + sep)) && existsSync(resolved)) {
+      return resolved;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 function registerTools(server2, client) {
   server2.registerTool(
@@ -31209,6 +31249,11 @@ Ancestry (${result.ancestry.length} earlier checkpoint(s)):
       const resolvedNodeId = nodeId ?? attachResult.node.id;
       const projectDisplayName = attachResult.project.name;
       const content = await client.getNodeContent(sessionId, resolvedNodeId);
+      if (!content.rawTranscript) {
+        return text(
+          `Checkpoint [node: ${resolvedNodeId}] in "${projectDisplayName}" has no stored transcript -- only its written summary. Checkpoints created with /handoff:project-checkpoint don't capture a turn-by-turn transcript; a byte-exact one only exists if that session ran /handoff:save-transcript. Nothing was written locally.`
+        );
+      }
       const encodedCwd = process.cwd().replace(/\//g, "-");
       const projectDir = join2(homedir2(), ".claude", "projects", encodedCwd);
       await mkdir(projectDir, { recursive: true });
@@ -31245,10 +31290,16 @@ This file is now a real, resumable Claude Code session on this machine -- but it
         );
       }
       const { sessionStart } = await client.getSessionStart(claudeSessionId);
-      const rawTranscript = readFileSync2(sessionStart.localTranscriptPath, "utf-8");
+      const trustedPath = resolveTrustedLocalPath(sessionStart.localTranscriptPath);
+      if (!trustedPath) {
+        return text(
+          `The transcript path Handoff has on record for this session ("${sessionStart.localTranscriptPath}") does not exist or is not under your home directory -- refusing to read it. This can happen if the session was logged from a different machine, or the file has since moved.`
+        );
+      }
+      const rawTranscript = readFileSync2(trustedPath, "utf-8");
       const result = await client.saveTranscript({ projectName, claudeSessionId, rawTranscript, actor });
       return text(
-        `Backed up the full transcript (${rawTranscript.length} bytes) from ${sessionStart.localTranscriptPath} to "${projectName}" [node: ${result.node.id}].`
+        `Backed up the full transcript (${rawTranscript.length} bytes) from ${trustedPath} to "${projectName}" [node: ${result.node.id}].`
       );
     }
   );
@@ -31256,23 +31307,21 @@ This file is now a real, resumable Claude Code session on this machine -- but it
     "handoff_checkpoint",
     {
       title: "Checkpoint a Handoff project",
-      description: "Save the current session's reasoning as a new checkpoint on a project. Call handoff_list_projects FIRST and compare its name+description list against what this session actually worked on -- reuse an existing project's exact name on a genuine match. Only pass a new projectName (with a one-sentence description of what it is) when nothing in that list matches; that creates the project and its first session automatically. Pass fromNodeId to fork from an earlier checkpoint instead of continuing the latest one.",
+      description: "Save the current session's reasoning as a new checkpoint on a project. The `summary` IS the checkpoint -- it is the only content stored, so write it in full: every decision and why, every file path, identifier, command, URL and link referenced, and enough context that someone with no access to this conversation could continue the work. Do not compress it to a few lines. This tool never captures a turn-by-turn transcript (use /handoff:save-transcript for a byte-exact session file). Call handoff_list_projects FIRST and compare its name+description list against what this session actually worked on -- reuse an existing project's exact name on a genuine match. Only pass a new projectName (with a one-sentence description of what it is) when nothing in that list matches; that creates the project and its first session automatically. Pass fromNodeId to fork from an earlier checkpoint instead of continuing the latest one.",
       inputSchema: {
         projectName: external_exports.string(),
         description: external_exports.string().optional().describe("One-sentence description of this project. Only used the first time a project is created; ignored otherwise."),
-        summary: external_exports.string(),
-        rawTranscript: external_exports.string().optional(),
+        summary: external_exports.string().describe("The complete written record of this checkpoint -- all decisions, rationale, file paths, ids, commands, and links. No length limit; do not truncate."),
         sessionId: external_exports.string().optional(),
         fromNodeId: external_exports.string().optional(),
         actor: external_exports.string()
       }
     },
-    async ({ projectName, description, summary, rawTranscript, sessionId, fromNodeId, actor }) => {
+    async ({ projectName, description, summary, sessionId, fromNodeId, actor }) => {
       const result = await client.checkpoint({
         projectName,
         description,
         summary,
-        rawTranscript,
         sessionId,
         parentId: fromNodeId,
         actor
@@ -31445,12 +31494,9 @@ ${result.skill.instructions}`);
 }
 
 // ../mcp-server/src/index.ts
-var baseUrl = process.env.HANDOFF_API_URL;
-if (!baseUrl) {
-  console.error("HANDOFF_API_URL must be set");
-  process.exit(1);
-}
-var server = new McpServer({ name: "handoff", version: "0.0.1" });
+var DEFAULT_BASE_URL = "https://orgcomputers-backend.azurewebsites.net";
+var baseUrl = process.env.HANDOFF_API_URL || DEFAULT_BASE_URL;
+var server = new McpServer({ name: "handoff", version: "0.1.0" });
 registerTools(server, createClient({ baseUrl, getApiKey: resolveApiKey }));
 var transport = new StdioServerTransport();
 await server.connect(transport);
